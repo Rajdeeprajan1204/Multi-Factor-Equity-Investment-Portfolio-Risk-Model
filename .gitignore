@@ -1,10 +1,27 @@
-# vscode settings
-.vscode/*
+# IDE
+.vscode/
+.idea/
 
-# ignore ipynb checkpoints
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
 
-.ipynb_checkpoints/*
+# Jupyter
+.ipynb_checkpoints/
 
-# README exports
+# OS / generated documentation
+.DS_Store
 README.pdf
 README.html
+
+# Local market data and generated outputs
+data/raw/
+data/processed/
+outputs/
+*.parquet
+*.feather
+*.csv
