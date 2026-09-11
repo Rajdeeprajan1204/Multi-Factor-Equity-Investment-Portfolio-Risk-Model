@@ -1,0 +1,10 @@
+# vscode settings
+.vscode/*
+
+# ignore ipynb checkpoints
+
+.ipynb_checkpoints/*
+
+# README exports
+README.pdf
+README.html
