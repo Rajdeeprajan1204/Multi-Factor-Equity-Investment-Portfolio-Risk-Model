@@ -1,369 +1,238 @@
+# Multi-Factor Equity Risk Model
 
-# Artificial Intelligence for Trading Nanodegree
+An institutional-style equity risk framework for decomposing portfolio risk into **systematic factor risk and idiosyncratic risk**, estimating a statistically robust covariance matrix, and translating the model into portfolio-level risk attribution.
 
-## Alpha Research and Factor Modelling
+> **Why this project:** I built this to bridge fundamental finance and quantitative implementation — the same intersection that matters when investment teams need portfolio analytics, risk infrastructure, and reliable market data rather than isolated research notebooks.
 
-## Project: Multi-Factor Model
+## What the model answers
 
-## Table of Contents
+Given a cross-section of equities and a portfolio, the framework answers:
 
-1. [Project Overview](#overview)
-2. [Data](#data)
-3. [Statistical Risk Model](#stat_risk_model)
-4. [Alpha Factors](#alpha_factors)
-   1. [Momentum 1 Year Factor](#momentum)
-   2. [Mean Reversion 5 Day Sector Neutral Factor](#mean_reversion)
-   3. [Mean Reversion 5 Day Sector Neutral Smoothed Factor](#mean_reversion_smoothed)
-   4. [Overnight Sentiment Factor](#overnight)
-   5. [Overnight Sentiment Factor Smoothed](#overnight_smoothed)
-5. [The Combined Alpha Factor](#alpha_combined)
-6. [Evaluate Alpha Factors](#eval)
-7. [Optimal Portfolio Constrained by Risk Model](#optimize)
-    1. [Objective and Constraints](#objective_constraints)
-    2. [Optimize with a Regularization Parameter](#optimization)
-    3. [Optimize with a Strict Factor Constraints and Target Weighting](#strict_optimization)
-8. [Libraries](#lib)
-9. [References](#refs)
+- How much risk is explained by common systematic factors?
+- Which latent factors drive the portfolio's volatility?
+- How much risk is stock-specific and therefore not diversified away?
+- Which holdings contribute most to total portfolio risk?
+- How do momentum, reversal and overnight signals behave when evaluated with realistic implementation constraints?
 
-<a id='overview'></a>
+## Model architecture
 
-***
+```text
+Market Data
+    │
+    ├── prices / returns / liquidity inputs
+    │
+    ▼
+Signal Research ───────► factor signals
+    │
+    │
+    ▼
+Statistical Risk Model
+    │
+    ├── PCA factor extraction
+    ├── factor covariance Ω
+    ├── asset-factor exposures B
+    └── idiosyncratic variance D
+    │
+    ▼
+Portfolio Risk Engine
+    │
+    ├── Σ = BΩB' + D
+    ├── portfolio volatility
+    ├── systematic / idiosyncratic split
+    └── marginal & component risk contribution
+    │
+    ▼
+Portfolio Analytics
+    ├── factor exposure
+    ├── risk concentration
+    └── signal-aware portfolio construction
+```
 
-### Project Overview
+## Core methodology
 
-In this project, I will build a [statistical risk model using PCA](#stat_risk_model). I’ll use this model to build a portfolio along with **5 alpha factors**. I’ll **create** these factors, then **evaluate** them using **factor-weighted returns, quantile analysis, sharpe ratio,** and **turnover analysis.** At the end of the project, I’ll optimize the portfolio using the risk model and factors using multiple optimization formulations.
+For asset returns \(R\), the model uses a statistical factor representation:
 
-<a id='data'></a>
-
-### Data
-
-For the dataset, we'll be using the end of day from [Quotemedia](https://www.quotemedia.com) and sector data from [Sharadar](http://www.sharadar.com/).
-
-Udacity doesn't have a license to redistribute the data to us. They are working on alternatives to this [problem](https://github.com/udacity/artificial-intelligence-for-trading/#no-data).
-
-<a id='stat_risk_model'></a>
-
-### Statistical Risk Model
-
-Portfolio risk is calculated using this formula:
-
-<center><img src="img/portfolio_risk.png" alt="portfolio risk" width="150"/></center>
+\[
+R_t = B F_t + \epsilon_t
+\]
 
 where:
 
-- *X* is the portfolio weights (weights assigned to each stock)
-- *B* is the factor betas (exposure of factors)
-- *F* is the factor covariance matrix (combined with factor betas gives systematic risk)
-- *S* is the idiosyncratic variance matrix (specific risk)
+- **B** = asset exposures to the latent factors
+- **F** = factor returns
+- **ε** = idiosyncratic return
 
-<a id='alpha_factors'></a>
+The covariance matrix is then estimated as:
 
-### Alpha Factors
+\[
+\Sigma = B\Omega B^T + D
+\]
 
-After calculating the profile risk, the following five alpha factors were created:
+where **Ω** is the factor covariance matrix and **D** is the diagonal idiosyncratic variance matrix.
 
-<a id='momentum'></a>
+For portfolio weights \(w\):
 
-- Momentum 1 Year Factor <sup>[[2]](#ref2)</sup>
+\[
+\sigma_p^2 = w^T\Sigma w
+\]
 
-Each factor has a hypothesis that goes with it. For this factor, it is "Higher past 12-month (252 days) returns are proportional to future return". Using that hypothesis, we've generate this code:
+The implementation also decomposes portfolio volatility into systematic and idiosyncratic components and calculates component risk contributions, making the model interpretable at the portfolio level rather than stopping at asset-level regressions.
 
-```python
-from zipline.pipeline.factors import Returns
+## Why PCA?
 
-def momentum_1yr(window_length, universe, sector):
-    return Returns(window_length=window_length, mask=universe) \
-        .demean(groupby=sector) \
-        .rank() \
-        .zscore()
+The original project used PCA as a statistical risk model. This refactor keeps that idea but makes the modelling choice explicit.
+
+PCA is useful when the objective is to identify **common sources of variation** without assuming in advance that every relevant risk driver has a clean economic label. The trade-off is equally important: PCA factors are statistical, not inherently interpretable economic factors. The README and methodology therefore distinguish between **latent risk factors** and **investment signals**.
+
+The number of components is configurable. The default is deliberately small enough to capture the dominant common variation without turning the model into a near-full-rank covariance estimator.
+
+## Signal research
+
+The repository also preserves the original project's alpha-research intuition, but separates it from the risk model.
+
+### 1. 12-month momentum
+
+A trailing 252-trading-day return signal captures medium-term price persistence. The signal is cross-sectionally standardized before portfolio use.
+
+### 2. 5-day reversal
+
+The negative of the trailing 5-day return is used as a simple short-horizon reversal signal. This is intentionally presented as a **research hypothesis**, not as a guaranteed source of alpha.
+
+### 3. Overnight return
+
+The overnight return is calculated as:
+
+\[
+R_{ON,t} = \frac{Open_t}{Close_{t-1}} - 1
+\]
+
+The implementation can aggregate the signal over a configurable trailing window.
+
+### 4. Signal smoothing
+
+Moving-average smoothing is treated as a turnover/stability decision rather than an automatic improvement. Smoothing can reduce noise but may also reduce responsiveness and alter the timing of a signal.
+
+## Portfolio risk attribution
+
+For portfolio covariance \(\Sigma\), marginal contribution to variance is:
+
+\[
+MCR_i = (\Sigma w)_i
+\]
+
+and component contribution is:
+
+\[
+CCR_i = \frac{w_i(\Sigma w)_i}{w^T\Sigma w}
+\]
+
+The contributions sum to 100% of portfolio variance. This is more useful for an institutional risk workflow than simply reporting portfolio volatility because it identifies **where the risk actually comes from**.
+
+## Project structure
+
+```text
+.
+├── README.md
+├── pyproject.toml
+├── requirements.txt
+├── .gitignore
+│
+├── src/
+│   └── multi_factor_risk/
+│       ├── __init__.py
+│       ├── config.py
+│       ├── data.py
+│       ├── factors.py
+│       ├── risk_model.py
+│       ├── portfolio.py
+│       ├── analytics.py
+│       └── pipeline.py
+│
+├── notebooks/
+│   └── README.md
+│
+├── docs/
+│   └── methodology.md
+│
+└── tests/
+    └── test_risk_model.py
 ```
 
-<a id='mean_reversion'></a>
+The key design decision is that **notebooks are the research interface; Python modules contain the model logic**. This makes the analysis easier to test, reuse and audit.
 
-- Mean Reversion 5 Day Sector Neutral Factor <sup>[[1]](#ref1)</sup>
+## Running the project
 
-I have implemented `mean_reversion_5day_sector_neutral` using the hypothesis "Short-term outperformers (underperformers) compared to their sector will revert." Using the returns data from universe, demean using the sector data to partition, rank, then converted to a zscore.
-
-```python
-def mean_reversion_5day_sector_neutral(window_length, universe, sector):
-    """
-    Generate the mean reversion 5 day sector neutral factor
-
-    Parameters
-    ----------
-    window_length : int
-        Returns window length
-    universe : Zipline Filter
-        Universe of stocks filter
-    sector : Zipline Classifier
-        Sector classifier
-
-    Returns
-    -------
-    factor : Zipline Factor
-        Mean reversion 5 day sector neutral factor
-    """
-    
-    return -Returns(window_length=window_length, mask = universe)\
-                    .demean(groupby=sector)\
-                    .rank()\
-                    .zscore()
+```bash
+python -m pip install -r requirements.txt
 ```
 
-<a id='mean_reversion_smoothed'></a>
+For public market data, the data layer can use Yahoo Finance through `yfinance`. For a controlled research environment, the same model accepts pre-cleaned price DataFrames, keeping the risk engine independent of the data vendor.
 
-- Mean Reversion 5 Day Sector Neutral Smoothed Factor
-
-Taking the output of the previous factor, we create a smoothed version. `mean_reversion_5day_sector_neutral_smoothed` generates a mean reversion 5 day sector neutral smoothed factor. Calling the mean_reversion_5day_sector_neutral function to get the unsmoothed factor, then using `SimpleMovingAverage` function to smooth it. We'll have to apply rank and zscore again.
+Example:
 
 ```python
-from zipline.pipeline.factors import SimpleMovingAverage
+from multi_factor_risk.pipeline import run_risk_analysis
 
-def mean_reversion_5day_sector_neutral_smoothed(window_length, universe, sector):
-    """
-    Generate the mean reversion 5 day sector neutral smoothed factor
+result = run_risk_analysis(
+    prices=prices,
+    weights=weights,
+    n_factors=5,
+)
 
-    Parameters
-    ----------
-    window_length : int
-        Returns window length
-    universe : Zipline Filter
-        Universe of stocks filter
-    sector : Zipline Classifier
-        Sector classifier
-
-    Returns
-    -------
-    factor : Zipline Factor
-        Mean reversion 5 day sector neutral smoothed factor
-    """
-    
-    mean_reversion = mean_reversion_5day_sector_neutral(window_length, universe, sector)
-
-    return SimpleMovingAverage(inputs=[mean_reversion], window_length = window_length).rank().zscore()
+print(result.portfolio_volatility)
+print(result.risk_contribution)
 ```
 
-<a id='overnight'></a>
+## Data engineering principles
 
-- Overnight Sentiment Factor <sup>[[1]](#ref1)</sup>
+This is deliberately a **data-aware** project rather than a data-vendor-specific one.
 
-For this factor, were using the hypothesis from the paper [Overnight Returns and Firm-Specific Investor Sentiment](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2554010).
+- Raw market data is not committed to the repository.
+- Data ingestion and model estimation are separate layers.
+- Missing values are handled explicitly before estimation.
+- Asset ordering is preserved between returns, exposures and portfolio weights.
+- Model parameters are configurable rather than embedded throughout notebooks.
+- The risk engine works on clean tabular inputs, allowing the upstream data source to change without rewriting the model.
 
-```python
-from zipline.pipeline.data import USEquityPricing
+## Validation and limitations
 
+A credible risk model is defined as much by its limitations as by its equations.
 
-class CTO(Returns):
-    """
-    Computes the overnight return, per hypothesis from
-    https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2554010
-    """
-    inputs = [USEquityPricing.open, USEquityPricing.close]
+This implementation does **not** claim to be a production institutional risk system. Important limitations include:
 
-    def compute(self, today, assets, out, opens, closes):
-        """
-        The opens and closes matrix is 2 rows x N assets, with the most recent at the bottom.
-        As such, opens[-1] is the most recent open, and closes[0] is the earlier close
-        """
-        out[:] = (opens[-1] - closes[0]) / closes[0]
+- PCA factors are sample-dependent and may not have stable economic interpretations.
+- Covariance estimates are sensitive to the estimation window.
+- Historical relationships can break during structural market regimes.
+- Public market data can contain survivorship, corporate-action and missing-data issues.
+- Signal backtests require careful treatment of look-ahead bias, trading costs, shorting constraints and liquidity.
+- A statistical covariance model should be complemented by stress testing and scenario analysis in a production setting.
 
-class TrailingOvernightReturns(Returns):
-    """
-    Sum of trailing 1m O/N returns
-    """
-    window_safe = True
+These limitations are intentional discussion points: a risk model should expose assumptions instead of hiding them behind a single volatility number.
 
-    def compute(self, today, asset_ids, out, cto):
-        out[:] = np.nansum(cto, axis=0)
+## Finance concepts demonstrated
 
+**Portfolio construction:** diversification, concentration, long/short weights, risk budgets.
 
-def overnight_sentiment(cto_window_length, trail_overnight_returns_window_length, universe):
-    cto_out = CTO(mask=universe, window_length=cto_window_length)
-    return TrailingOvernightReturns(
-         inputs=[cto_out],window_length=trail_overnight_returns_window_length
-         )\
-         .rank().zscore()
-```
+**Risk modelling:** covariance estimation, PCA, systematic risk, idiosyncratic risk, factor exposure.
 
-<a id='overnight_smoothed'></a>
+**Portfolio analytics:** volatility, marginal risk, component risk contribution and factor-level attribution.
 
-- Overnight Sentiment Smoothed
+**Quantitative research:** momentum, reversal, overnight returns, cross-sectional normalization and signal smoothing.
 
-Just like the implemented factor, we'll also smooth this factor.
+**Data discipline:** reproducible inputs, explicit transformations, validation and separation of ingestion from modelling.
 
-```python
-def overnight_sentiment_smoothed(cto_window_length, trail_overnight_returns_window_length, universe):
+## What I would extend next
 
-    unsmoothed_factor = overnight_sentiment(cto_window_length, trail_overnight_returns_window_length, universe)
-    
-    return SimpleMovingAverage(
-            inputs=[unsmoothed_factor], window_length=trail_overnight_returns_window_length
-            ) \
-            .rank() \
-            .zscore()
-```
+1. Exponentially weighted covariance estimation.
+2. Shrinkage of the factor and idiosyncratic covariance estimates.
+3. Economic factor overlays such as value, size, quality and low volatility.
+4. Sector and country neutrality constraints.
+5. Stress testing against historical and hypothetical factor shocks.
+6. Transaction-cost and liquidity-aware portfolio optimization.
+7. Automated data-quality checks and model monitoring.
 
-<a id='alpha_combined'></a>
+## Author
 
-### Combined Alpha Factor
+**Rajdeep Rajan** — engineering background with a finance-first focus across investment banking, capital markets and quantitative investment analysis.
 
-With all the factor implementations done, let's add them to a _zipline_ pipeline.
-
-```python
-universe = AverageDollarVolume(window_length=120).top(500)
-sector = project_helper.Sector()
-
-pipeline = Pipeline(screen=universe)
-pipeline.add(
-    momentum_1yr(252, universe, sector),
-    'Momentum_1YR')
-pipeline.add(
-    mean_reversion_5day_sector_neutral(5, universe, sector),
-    'Mean_Reversion_5Day_Sector_Neutral')
-pipeline.add(
-    mean_reversion_5day_sector_neutral_smoothed(5, universe, sector),
-    'Mean_Reversion_5Day_Sector_Neutral_Smoothed')
-pipeline.add(
-    overnight_sentiment(2, 5, universe),
-    'Overnight_Sentiment')
-pipeline.add(
-    overnight_sentiment_smoothed(2, 5, universe),
-    'Overnight_Sentiment_Smoothed')
-all_factors = engine.run_pipeline(pipeline, factor_start_date, universe_end_date)
-# all_factors.head()
-```
-
-<a id='eval'></a>
-
-### Evaluate Alpha Factors
-
-*Note:* _We're evaluating the alpha factors using delay of 1_
-
-#### Quantile Analysis
-
-Let's view the factor returns over time. It looks like moving up and to the right.
-
-![factor_weighted_rets](img/factor_weighted_rets.jpg)
-
-It is not enough to look just at the factor weighted return. A good alpha is also monotonic in quantiles. Let's looks the basis points for the factor returns.
-
-![quantile_res](img/quantile_res.jpg)
-
-Observations:
-
-- None of these alphas are **strictly monotonic**; this should lead you to question why this is? Further research and refinement of the alphas needs to be done. What is it about these alphas that leads to the highest ranking stocks in all alphas except MR 5D smoothed to *not* perform the best.
-- The majority of the return is coming from the **short side** in all these alphas. The negative return in quintile 1 is very large in all alphas. This could also a cause for concern becuase when you short stocks, you need to locate the short; shorts can be expensive or not available at all.
-- If you look at the magnitude of the return spread (i.e., Q1 minus Q5), we are working with daily returns in the 0.03%, i.e., **3 basis points**, neighborhood *before all transaction costs, shorting costs, etc.*. Assuming 252 days in a year, that's 7.56% return annualized. Transaction costs may cut this in half. As such, it should be clear that these alphas can only survive in an institutional setting and that leverage will likely need to be applied in order to achieve an attractive return.
-
-#### Turnover Analysis
-
-Without doing a full and formal backtest, we can analyze how stable the alphas are over time. Stability in this sense means that from period to period, the alpha ranks do not change much. Since trading is costly, we always prefer, all other things being equal, that the ranks do not change significantly per period. We can measure this with the **factor rank autocorrelation (FRA)**.
-
-<a id='fra'></a>
-
-![turnover_analysis](img/turnover_analysis.jpg)
-
-#### Sharpe Ratio of the Alphas
-
-The last analysis we'll do on the factors will be sharpe ratio. Function `sharpe_ratio` calculate the sharpe ratio of factor returns.
-
-```python
-def sharpe_ratio(factor_returns, annualization_factor):
-    """
-    Get the sharpe ratio for each factor for the entire period
-
-    Parameters
-    ----------
-    factor_returns : DataFrame
-        Factor returns for each factor and date
-    annualization_factor: float
-        Annualization Factor
-
-    Returns
-    -------
-    sharpe_ratio : Pandas Series of floats
-        Sharpe ratio
-    """
-
-    return annualization_factor * np.mean(factor_returns)/np.std(factor_returns, ddof=1)
-```
-
-Let's see what the sharpe ratio for the factors are. Generally, a Sharpe Ratio of near 1.0 or higher is an acceptable single alpha for this universe.
-
-![sharpe](img/sharpe.jpg)
-
-Observation:
-
-Sharpe Ratio of 1.13 for momentum factor is good but if we look at the [auto-correlation plots](#fra), FRA for momentum factor looks stable. So smoothing the momentum factor will not have any significant change.
-
-#### The Combined Alpha Vector
-
-To use these alphas in a portfolio, we need to combine them somehow so we get a single score per stock. This is a area where machine learning can be very helpful. In this module, however, we will take the simplest approach of combination: simply averaging the scores from each alpha.
-
-<a id='optimize'></a>
-
-### Optimal Portfolio Constrained by Risk Model
-
-<a id='objective_constraints'></a>
-
-#### Objective and Constraints
-
-This is the list of contraints that will optimize against:
-
-<img src="img/objective_constraints.jpg" alt="objective_constraint" width="200"/>
-
-Where _x_ is the portfolio weights, _B_ is the factor betas, and _r_ is the portfolio risk
-
-The first constraint is that the predicted risk be less than some maximum limit. The second and third constraints are on the maximum and minimum portfolio factor exposures. The fourth constraint is the "market neutral constraint: the sum of the weights must be zero. The fifth constraint is the leverage constraint: the sum of the absolute value of the weights must be less than or equal to 1.0. The last are some minimum and maximum limits on individual holdings.
-
-Weights generated after applying those constraints:
-
-![portfolio_holdings_by_stock](img/portfolio_holdings_by_stock.jpg)
-
-Yikes. It put most of the weight in a few stocks.
-
-![portfolio_net_factor_exp](img/portfolio_net_factor_exp.jpg)
-
-<a id='optimization'></a>
-
-#### Optimize with a Regularization Parameter
-
-This is the weights distribution after applying regularization to the **objective function**.
-
-![portfolio_holdings_by_stocks_reg](img/portfolio_holdings_by_stocks_reg.jpg)
-
-Nice. Well diverfied.
-
-![portfolio_net_factor_exp_reg](img/portfolio_net_factor_exp_reg.jpg)
-
-<a id='strict_optimization'></a>
-
-#### Optimize with a Strict Factor Constraints and Target Weighting
-
-Another common formulation is to take a predefined target weighting(e.g., a quantile portfolio), and solve to get as close to that portfolio while respecting portfolio-level constraints.
-
-![portfolio_holdings_by_stocks_strict](img/portfolio_holdings_by_stocks_strict.jpg)
-
-![portfolio_net_factor_exp_strict](img/portfolio_net_factor_exp_strict.jpg)
-
-<a id='lib'></a>
-
-### Libraries
-
-This project used Python 3.6.3. The necessary libraries are mentioned in `requirements.txt`:
-
-<a id='refs'></a>
-
-### References
-
-<a id='ref1'></a>
-
-1. [Overnight Returns and Firm-Specific Investor Sentiment](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2554010)
-
-<a id='ref2'></a>
-
-2. [The Formation Process of Winners and Losers in Momentum Investing](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2610571)
-
-3. [Expected Skewness and Momentum](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2600014)
-
-4. [Arbitrage Asymmetry and the Idiosyncratic Volatility Puzzle](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2155491)
+The objective is not to present a black-box quant strategy. It is to demonstrate that an investment professional can understand the financial problem, formulate the statistical model, implement the data pipeline and explain the resulting portfolio risk in business terms.
